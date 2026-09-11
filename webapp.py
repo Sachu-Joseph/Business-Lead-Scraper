@@ -71,6 +71,7 @@ def init_db():
                 rejected INTEGER NOT NULL DEFAULT 0,
                 complete INTEGER NOT NULL DEFAULT 0,
                 partial INTEGER NOT NULL DEFAULT 0,
+                phase TEXT NOT NULL DEFAULT 'Queued',
                 error TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
@@ -96,6 +97,14 @@ def init_db():
             );
             """
         )
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if "phase" not in columns:
+            connection.execute(
+                "ALTER TABLE jobs ADD COLUMN phase TEXT NOT NULL DEFAULT 'Queued'"
+            )
 
 
 class JobRequest(BaseModel):
@@ -149,15 +158,19 @@ def save_lead(job_id, lead):
 
 def run_job(job_id, categories, locations):
     try:
-        update_job(job_id, status="running")
+        update_job(job_id, status="running", phase="Preparing sources")
         candidates = []
         for category_input in categories:
             category = fixed_category(category_input)
             for location in locations:
                 with _jobs_lock:
                     if _jobs.get(job_id, {}).get("cancelled"):
-                        update_job(job_id, status="cancelled")
+                        update_job(job_id, status="cancelled", phase="Cancelled")
                         return
+                update_job(
+                    job_id,
+                    phase=f"Scanning {category} in {location}",
+                )
                 found = discover_businesses(category, location, wanted=0)
                 for candidate in found:
                     candidate["category"] = category
@@ -169,11 +182,16 @@ def run_job(job_id, categories, locations):
         candidates = deduplicate_businesses(candidates)
         verified = []
         rejected = 0
-        for candidate in candidates:
+        total_candidates = len(candidates)
+        for index, candidate in enumerate(candidates, start=1):
             with _jobs_lock:
                 if _jobs.get(job_id, {}).get("cancelled"):
-                    update_job(job_id, status="cancelled")
+                    update_job(job_id, status="cancelled", phase="Cancelled")
                     return
+            update_job(
+                job_id,
+                phase=f"Verifying candidate {index} of {total_candidates}",
+            )
             reasons = []
             lead = verify_candidate(
                 candidate,
@@ -206,6 +224,7 @@ def run_job(job_id, categories, locations):
         update_job(
             job_id,
             status="completed",
+            phase="Complete",
             verified=len(verified),
             complete=complete,
             partial=len(verified) - complete,
@@ -213,7 +232,7 @@ def run_job(job_id, categories, locations):
         )
     except Exception as error:
         add_diagnostic(job_id, f"{type(error).__name__}: {error}")
-        update_job(job_id, status="failed", error=str(error))
+        update_job(job_id, status="failed", phase="Failed", error=str(error))
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -236,6 +255,7 @@ def index():
     .content{max-width:1320px;padding:36px 42px}.hero{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:25px}.hero h2{font:700 30px "Playfair Display";margin:0 0 8px}.hero p{color:var(--muted);margin:0}.badge{background:#e8f3ee;color:var(--green);border-radius:20px;padding:8px 13px;font-size:11px;font-weight:600}
     .panel{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 30px #2634480b}.search-panel{padding:25px;margin-bottom:22px}.panel-title{font-weight:700;margin:0 0 18px;font-size:15px}.form-grid{display:grid;grid-template-columns:1fr 1fr auto;gap:14px;align-items:end}.field label{display:block;color:#657285;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.8px;margin:0 0 7px}.field input{width:100%;border:1px solid #d8dce2;border-radius:8px;padding:13px 14px;color:var(--ink);font:14px "DM Sans";outline:0;background:#fcfcfb}.field input:focus{border-color:var(--gold);box-shadow:0 0 0 3px #c9a86a22}.primary{border:0;border-radius:8px;padding:13px 21px;background:var(--navy);color:#fff;font:600 13px "DM Sans";cursor:pointer;white-space:nowrap}.primary:hover{background:#223656}.primary:disabled{opacity:.6;cursor:wait}
     .status-panel{padding:22px;display:none;margin-bottom:22px}.status-head{display:flex;justify-content:space-between;align-items:center}.status-title{font-weight:700}.status-copy{color:var(--muted);font-size:12px}.progress{height:7px;background:#edf0f3;border-radius:10px;overflow:hidden;margin:17px 0}.progress i{display:block;height:100%;width:5%;background:linear-gradient(90deg,var(--gold),#e3c787);border-radius:10px;transition:width .4s}.metrics{display:flex;gap:32px}.metric b{font-size:21px}.metric span{display:block;color:var(--muted);font-size:11px;margin-top:2px}.actions{display:flex;gap:8px}.ghost{border:1px solid #d9dee5;background:#fff;color:var(--navy);border-radius:7px;padding:8px 12px;font:600 11px "DM Sans";cursor:pointer}.danger{color:var(--red);border-color:#edcccc}
+    .activity{display:flex;align-items:center;gap:8px;color:#8a6b2f;font-size:11px;margin-top:9px}.pulse{width:7px;height:7px;background:var(--gold);border-radius:50%;box-shadow:0 0 0 0 #c9a86a66;animation:pulse 1.5s infinite}@keyframes pulse{70%{box-shadow:0 0 0 7px #c9a86a00}}
     .results-head{display:flex;justify-content:space-between;align-items:center;margin:30px 0 13px}.results-head h3{font:700 20px "Playfair Display";margin:0}.count{color:var(--muted);font-size:12px}.table-wrap{overflow:auto}.results-table{border-collapse:collapse;width:100%;min-width:850px}.results-table th{text-align:left;background:#faf9f6;color:#788394;font-size:10px;letter-spacing:1px;text-transform:uppercase;padding:13px 15px;border-bottom:1px solid var(--line)}.results-table td{padding:15px;border-bottom:1px solid #f0eee9;vertical-align:top}.results-table tr:hover td{background:#fdfcf9}.name{font-weight:700;color:var(--navy)}.sub{display:block;color:#9aa3af;font-size:11px;margin-top:4px}.link{color:#3b678f;text-decoration:none;max-width:180px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.empty{text-align:center;padding:55px 20px;color:var(--muted)}.empty .empty-icon{font-size:28px;color:var(--gold);margin-bottom:10px}.error{color:var(--red);background:#fff2f2;border:1px solid #f1d2d2;border-radius:8px;padding:12px;font-size:12px}
     @media(max-width:850px){.shell{display:block}.sidebar{display:none}.topbar{padding:0 20px}.content{padding:25px 18px}.form-grid{grid-template-columns:1fr}.hero{display:block}.badge{display:inline-block;margin-top:15px}.secure{display:none}}
     </style></head><body><div class="shell">
@@ -245,7 +265,7 @@ def index():
     <main><header class="topbar"><div><div class="eyebrow">Workspace / Discovery</div><h1>Business Intelligence</h1></div><div class="secure"><span>●</span>Local & private</div></header>
     <section class="content"><div class="hero"><div><h2>Discover your next opportunity.</h2><p>Find businesses with verified contact details, ranked by completeness.</p></div><div class="badge">✦ Free intelligence search</div></div>
     <div class="panel search-panel"><div class="panel-title">Start a new discovery</div><form id="form"><div class="form-grid"><div class="field"><label for="categories">Business categories</label><input id="categories" placeholder="e.g. toy store, cafe" required></div><div class="field"><label for="locations">Locations</label><input id="locations" placeholder="e.g. Chennai, Madurai" required></div><button class="primary" id="submit" type="submit">Begin discovery&nbsp; →</button></div></form></div>
-    <div class="panel status-panel" id="statusPanel"><div class="status-head"><div><div class="status-title" id="statusTitle">Preparing discovery</div><div class="status-copy" id="statusCopy">Connecting to public sources…</div></div><div class="actions"><button class="ghost danger" id="cancel" type="button">Cancel</button><button class="ghost" id="download" type="button" hidden>Download CSV</button></div></div><div class="progress"><i id="bar"></i></div><div class="metrics"><div class="metric"><b id="discovered">0</b><span>Discovered</span></div><div class="metric"><b id="verified">0</b><span>Verified</span></div><div class="metric"><b id="complete">0</b><span>Complete contacts</span></div><div class="metric"><b id="rejected">0</b><span>Filtered</span></div></div></div>
+    <div class="panel status-panel" id="statusPanel"><div class="status-head"><div><div class="status-title" id="statusTitle">Preparing discovery</div><div class="status-copy" id="statusCopy">Connecting to public sources…</div><div class="activity"><i class="pulse" id="pulse"></i><span id="activity">Waiting for the first source response</span></div></div><div class="actions"><button class="ghost danger" id="cancel" type="button">Cancel</button><button class="ghost" id="download" type="button" hidden>Download CSV</button></div></div><div class="progress"><i id="bar"></i></div><div class="metrics"><div class="metric"><b id="discovered">0</b><span>Discovered</span></div><div class="metric"><b id="verified">0</b><span>Verified</span></div><div class="metric"><b id="complete">0</b><span>Complete contacts</span></div><div class="metric"><b id="rejected">0</b><span>Filtered</span></div></div></div>
     <div class="results-head"><h3>Lead directory</h3><span class="count" id="count">No search run yet</span></div><div class="panel table-wrap" id="results"><div class="empty"><div class="empty-icon">✦</div><div>Your verified prospects will appear here.</div><div class="sub">Complete website, phone and email records are prioritized.</div></div></div>
     </section></main></div>
     <script>
@@ -255,7 +275,7 @@ def index():
     const cell=v=>v?esc(v):'<span class="sub">Not found</span>';
     function showRows(rows){$('count').textContent=rows.length+' prospect'+(rows.length===1?'':'s')+' found'; if(!rows.length){results.innerHTML='<div class="empty"><div class="empty-icon">⌕</div>No verified businesses found for this search.</div>';return}
       results.innerHTML='<table class="results-table"><thead><tr><th>Business</th><th>Category</th><th>Website</th><th>Phone</th><th>Address</th><th>Email</th></tr></thead><tbody>'+rows.map(r=>'<tr><td><span class="name">'+esc(r.business_name)+'</span></td><td>'+esc(r.category)+'</td><td>'+(r.website?'<a class="link" href="'+esc(r.website)+'" target="_blank" rel="noreferrer">'+esc(r.website)+'</a>':'<span class="sub">Not published</span>')+'</td><td>'+cell(r.phone)+'</td><td>'+cell(r.address)+'</td><td>'+cell(r.email)+'</td></tr>').join('')+'</tbody></table>'}
-    async function poll(){try{const s=await (await fetch('/api/jobs/'+jobId)).json(); const done=['completed','failed','cancelled'].includes(s.status); $('statusTitle').textContent=done?(s.status==='completed'?'Discovery complete':s.status[0].toUpperCase()+s.status.slice(1)):'Scanning public sources'; $('statusCopy').textContent=s.error||('Searching, verifying and ranking candidates…'); ['discovered','verified','complete','rejected'].forEach(k=>$(k).textContent=s[k]||0); $('bar').style.width=done?'100%':Math.min(95,Math.max(7,(s.verified/(s.discovered||1))*90))+'%'; if(done){clearInterval(timer);submit.disabled=false;cancel.hidden=true;download.hidden=s.status!=='completed'; if(s.status==='failed') results.innerHTML='<div class="error">The discovery failed: '+esc(s.error||'Unknown error')+'</div>'; else showRows(await (await fetch('/api/jobs/'+jobId+'/leads')).json())}}catch(e){$('statusCopy').textContent='Connection interrupted. Retrying…'}}
+    async function poll(){try{const s=await (await fetch('/api/jobs/'+jobId)).json(); const done=['completed','failed','cancelled'].includes(s.status); $('statusTitle').textContent=done?(s.status==='completed'?'Discovery complete':s.status[0].toUpperCase()+s.status.slice(1)):s.phase||'Scanning public sources'; $('statusCopy').textContent=s.error||('Searching, verifying and ranking candidates…'); $('activity').textContent=done?'Run finished':(s.phase||'Working'); $('pulse').style.display=done?'none':'block'; ['discovered','verified','complete','rejected'].forEach(k=>$(k).textContent=s[k]||0); $('bar').style.width=done?'100%':Math.min(95,Math.max(7,(s.verified/(s.discovered||1))*90))+'%'; if(done){clearInterval(timer);submit.disabled=false;cancel.hidden=true;download.hidden=s.status!=='completed'; if(s.status==='failed') results.innerHTML='<div class="error">The discovery failed: '+esc(s.error||'Unknown error')+'</div>'; else showRows(await (await fetch('/api/jobs/'+jobId+'/leads')).json())}}catch(e){$('statusCopy').textContent='Connection interrupted. Retrying…';$('activity').textContent='Reconnecting to the local worker…'}}
     form.addEventListener('submit',async e=>{e.preventDefault();submit.disabled=true;cancel.hidden=false;download.hidden=true;panel.style.display='block';results.innerHTML='<div class="empty"><div class="empty-icon">✦</div>Scanning public sources…</div>'; $('count').textContent='Discovery in progress'; const body={categories:split($('categories').value),locations:split($('locations').value)}; try{const r=await fetch('/api/jobs',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});if(!r.ok)throw new Error('Could not start discovery');jobId=(await r.json()).id;download.onclick=()=>location.href='/api/jobs/'+jobId+'/csv';poll();timer=setInterval(poll,1500)}catch(err){submit.disabled=false;$('statusCopy').textContent=err.message}});
     cancel.addEventListener('click',async()=>{if(jobId)await fetch('/api/jobs/'+jobId+'/cancel',{method:'POST'});cancel.disabled=true;$('statusCopy').textContent='Cancellation requested…'});
     </script></body></html>
