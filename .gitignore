@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.*
+
+# Local scraper runtime state and generated exports
+data/*.sqlite3
+data/*.csv
+data/*.db
+
+# Editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
