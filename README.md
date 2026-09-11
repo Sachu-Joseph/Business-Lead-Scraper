@@ -13,6 +13,11 @@ internal uncertainty reasons instead of silently being treated as clean data.
 Businesses without websites remain eligible when their map identity,
 category, and location evidence are valid.
 
+For website-backed businesses, verification checks up to four targeted public
+pages, prioritizing contact, location, directions, booking, about, shop, and
+order pages. Missing phone, email, or address values are filled only when the
+official site publishes them; existing trusted values are never overwritten.
+
 Ordinary web search and public Instagram/Facebook discovery are enabled by
 default for broader coverage. Search-result titles are never trusted as final
 business names; candidates still require strict identity, category, location,

@@ -127,6 +127,16 @@ BOOKING_PAGE_WORDS = (
     "reserve",
 )
 
+LOCATION_PAGE_WORDS = (
+    "location",
+    "locations",
+    "find-us",
+    "findus",
+    "directions",
+    "visit",
+    "where-we-are",
+)
+
 WHATSAPP_DOMAINS = (
     "wa.me",
     "api.whatsapp.com",
@@ -2814,7 +2824,7 @@ def extract_contacts(
             ):
                 priority_pages.append(page)
 
-        # Then useful commerce pages.
+        # Then pages that commonly contain a second address or phone.
         for page in internal_pages:
 
             if page in priority_pages:
@@ -2825,18 +2835,18 @@ def extract_contacts(
             if any(
                 word in page_lower
                 for word in (
-                    "shop",
-                    "store",
-                    "product",
-                    "catalog",
-                    "order",
+                    *ABOUT_PAGE_WORDS,
+                    *LOCATION_PAGE_WORDS,
+                    *BOOKING_PAGE_WORDS,
+                    *COMMERCE_PAGE_WORDS,
+                    *ORDER_PAGE_WORDS,
                 )
             ):
                 priority_pages.append(page)
 
-        # Contact and commerce pages complement each other: one corroborates
-        # contact details, the other exposes order/booking signals.
-        priority_pages = priority_pages[:2]
+        # A small bounded crawl improves coverage without turning a lead
+        # verification into an unbounded site scrape.
+        priority_pages = list(dict.fromkeys(priority_pages))[:4]
 
         for page_url in priority_pages:
 
@@ -2859,9 +2869,11 @@ def extract_contacts(
                 page_result,
             )
 
-            # Stop after a usable outreach channel is corroborated.
-            if result.get("phone") and (
-                result.get("email") or result.get("whatsapp")
+            # Stop once all useful public contact fields are available.
+            if (
+                result.get("phone")
+                and (result.get("email") or result.get("whatsapp"))
+                and result.get("address")
             ):
                 break
 
