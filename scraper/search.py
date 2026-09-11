@@ -1034,7 +1034,8 @@ def discover_google_places(category, location, wanted):
         "X-Goog-Api-Key": api_key,
         "X-Goog-FieldMask": (
             "places.id,places.displayName,places.formattedAddress,"
-            "places.websiteUri,places.businessStatus"
+            "places.websiteUri,places.businessStatus,"
+            "places.internationalPhoneNumber"
         ),
     }
     candidates = []
@@ -1066,7 +1067,7 @@ def discover_google_places(category, location, wanted):
                 continue
             seen_place_ids.add(place_id)
 
-            if not name or not website or is_bad_candidate(name, website):
+            if not name or is_bad_candidate(name, website):
                 continue
 
             candidates.append({
@@ -1076,12 +1077,21 @@ def discover_google_places(category, location, wanted):
                 "website": website,
                 "url": website,
                 "address": str(place.get("formattedAddress", "")).strip(),
-                "phone": "",
+                "phone": str(
+                    place.get("internationalPhoneNumber", "")
+                ).strip(),
                 "email": "",
                 "whatsapp": "",
                 "source": "google_places",
                 "search_location": location,
                 "search_score": 45,
+                "_category_evidence": f"{category} Google Places",
+                "_location_evidence": str(
+                    place.get("formattedAddress", "")
+                ).strip() or location,
+                "_category_verified": True,
+                "_location_verified": True,
+                "_google_verified": True,
             })
 
     return candidates

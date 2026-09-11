@@ -909,6 +909,7 @@ def verify_candidate(
 
     if (
         candidate.get("_osm_verified")
+        or candidate.get("_google_verified")
         or candidate.get("_social_verified")
     ) and not website:
 

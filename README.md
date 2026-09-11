@@ -32,6 +32,22 @@ Fallback candidates still pass the same category/location checks and website
 verification. The scraper does not automate logged-in platform pages, scrape
 private content, or bypass platform controls.
 
+## Optional Google Places coverage
+
+Google Maps cannot be scraped reliably through its browser interface. For
+additional map coverage, configure the official Google Places API with a key
+that has Places API (New) enabled:
+
+```powershell
+$env:GOOGLE_MAPS_API_KEY="your-api-key"
+uvicorn webapp:app --reload
+```
+
+Google Places results are used only for discovery. Businesses with a public
+Google phone/address but no website are retained as legitimate partial leads;
+businesses with a website still go through official-site verification. Google
+Cloud billing and API quotas are controlled by the account that owns the key.
+
 ## Optional Instagram enrichment
 
 Existing leads can be enriched with public Business Discovery fields when the
