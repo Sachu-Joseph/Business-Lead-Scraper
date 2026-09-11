@@ -4,6 +4,7 @@ import json
 import sqlite3
 import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -105,6 +106,17 @@ def init_db():
             connection.execute(
                 "ALTER TABLE jobs ADD COLUMN phase TEXT NOT NULL DEFAULT 'Queued'"
             )
+        connection.execute(
+            """
+            UPDATE jobs
+            SET status = 'failed',
+                phase = 'Interrupted',
+                error = 'Job interrupted when the web app restarted',
+                updated_at = ?
+            WHERE status IN ('queued', 'running')
+            """,
+            (utc_now(),),
+        )
 
 
 class JobRequest(BaseModel):
@@ -183,27 +195,49 @@ def run_job(job_id, categories, locations):
         verified = []
         rejected = 0
         total_candidates = len(candidates)
-        for index, candidate in enumerate(candidates, start=1):
-            with _jobs_lock:
-                if _jobs.get(job_id, {}).get("cancelled"):
-                    update_job(job_id, status="cancelled", phase="Cancelled")
-                    return
-            update_job(
-                job_id,
-                phase=f"Verifying candidate {index} of {total_candidates}",
-            )
+
+        def verify_one(candidate):
             reasons = []
             lead = verify_candidate(
                 candidate,
                 fixed_category(candidate.get("category", "")),
-                candidate.get("requested_location", candidate.get("search_location", "")),
+                candidate.get(
+                    "requested_location",
+                    candidate.get("search_location", ""),
+                ),
                 reasons,
             )
-            if lead:
-                verified.append(lead)
-            else:
-                rejected += 1
-            update_job(job_id, verified=len(verified), rejected=rejected)
+            return lead, reasons
+
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            futures = {
+                executor.submit(verify_one, candidate): candidate
+                for candidate in candidates
+            }
+            for index, future in enumerate(as_completed(futures), start=1):
+                with _jobs_lock:
+                    if _jobs.get(job_id, {}).get("cancelled"):
+                        update_job(job_id, status="cancelled", phase="Cancelled")
+                        return
+                try:
+                    lead, reasons = future.result()
+                except Exception as error:
+                    lead = None
+                    reasons = [
+                        f"{type(error).__name__}: verification crashed"
+                    ]
+                if lead:
+                    verified.append(lead)
+                else:
+                    rejected += 1
+                if reasons:
+                    add_diagnostic(job_id, "; ".join(reasons))
+                update_job(
+                    job_id,
+                    phase=f"Verifying candidate {index} of {total_candidates}",
+                    verified=len(verified),
+                    rejected=rejected,
+                )
 
         verified = deduplicate_verified(verified)
         verified.sort(
